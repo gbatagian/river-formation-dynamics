@@ -1,3 +1,19 @@
+'''
+Dependencies:
+    * networkx
+    * matplotlib
+
+Description:
+    This script implements the River Formation Dynamics (RFD) algorithm for finding optimal paths on a graph. 
+    It simulates water flow and erosion to reinforce paths from an origin node to a destination node. 
+    The algorithm is applied to a 2D grid graph and generates 2 images: graph.png and path_altitude.png.
+    These images visualize the optimal path as identified by algorithm.
+    By default, random weights are assigned to the edges of the graph on each execution.
+
+Execute:
+    python rdf.py
+'''
+
 import random
 from typing import Any
 from typing import Hashable
@@ -9,25 +25,34 @@ import networkx as nx
 
 
 class RFD:
-    def __init__(self, graph: nx.Graph, in_node: Hashable, out_node: Hashable) -> None:
+    def __init__(
+        self,
+        graph: nx.Graph,
+        origin: Hashable,
+        destination: Hashable,
+        n_iter: int | None = None,
+    ) -> None:
         """
         Initialize the River Formation Dynamics (RFD) algorithm.
 
         Args:
             graph (nx.Graph): The input graph.
-            in_node (Hashable): The starting node.
-            out_node (Hashable): The destination node.
+            origin (Hashable): The starting node.
+            destination (Hashable): The destination node.
         """
         self.graph = graph
-        self.in_node = in_node
-        self.out_node = out_node
+        self.origin = origin
+        self.destination = destination
+        self.n_nodes = len(graph.nodes)
 
-        self.altitude_max = 100
+        self.altitude_start = 100
         self.default_weight = 1
         self.climbing_param = 1
+        self.climbing_param_increment = 0.2
+        self.climbing_param_increment_every = 5
         self.n_drops = 100
         self.erosion_param = 20
-        self.n_season_stop = 75
+        self.n_iterations = int((3 / 2) * self.n_nodes) if n_iter is None else n_iter
 
         self.droplets = {}
         self.erosions = {}
@@ -36,10 +61,10 @@ class RFD:
     def initialise_altitudes(self) -> None:
         """
         Initialize the altitudes of all nodes in the graph.
-        Sets self.altitude_max for all nodes except the out_node, which is set to 0.
+        Sets self.altitude_start for all nodes except the destination, which is set to 0.
         """
-        attrs = {node: {"altitude": self.altitude_max} for node in self.graph.nodes()}
-        attrs[self.out_node] = {"altitude": 0}
+        attrs = {node: {"altitude": self.altitude_start} for node in self.graph.nodes()}
+        attrs[self.destination] = {"altitude": 0}
 
         nx.set_node_attributes(self.graph, attrs)
 
@@ -47,7 +72,9 @@ class RFD:
         """
         Initialize edge weights (distances) in the graph.
         """
-        attrs = {edge: {"distance": self.default_weight} for edge in self.graph.edges()}
+        attrs = {
+            edge: {"distance": random.randint(1, 10)} for edge in self.graph.edges()
+        }
 
         nx.set_edge_attributes(self.graph, attrs)
 
@@ -114,21 +141,21 @@ class RFD:
             return 0
 
         if gradient == 0:
-            return self.erosion_param / ((len(self.graph.nodes) - 1) * self.n_drops)
+            return self.erosion_param / ((self.n_nodes - 1) * self.n_drops)
 
         return (
             abs(self.gradient(node_i, node_j))
             * self.erosion_param
-            / ((len(self.graph.nodes) - 1) * self.n_drops)
+            / ((self.n_nodes - 1) * self.n_drops)
         )
 
     def place_droplets(self) -> None:
         """
-        Place droplets at the starting node (in_node).
+        Place droplets at the starting node (origin).
         """
-        self.droplets = {idx: self.in_node for idx in range(len(self.graph.nodes))}
+        self.droplets = {idx: self.origin for idx in range(self.n_nodes)}
 
-    def move(self, droplet_id: int):
+    def move(self, droplet_id: int) -> None:
         """
         Move a droplet to a neighboring node based on transition probabilities.
 
@@ -136,7 +163,7 @@ class RFD:
             droplet_id (int): The droplet ID.
         """
         current_node = self.droplets[droplet_id]
-        if current_node == self.out_node:
+        if current_node == self.destination:
             return
 
         transition_probs = self.transition_probabilities(current_node)
@@ -150,28 +177,31 @@ class RFD:
                 self.erosions[current_node] = self.erosion(current_node, neighbor)
                 break
 
-    def erode(self):
+    def erode(self) -> None:
         """
         Apply erosion to nodes based on droplets' movements.
         """
         for node, erosion in self.erosions.items():
-            if node == self.out_node:
+            if node == self.destination:
                 continue
 
             self.graph.nodes[node]["altitude"] -= erosion
 
-    def deposit_sediments(self):
+    def deposit_sediments(self) -> None:
         erosion_produced = sum(self.erosions.values())
 
         new_altitudes = {
-            node: {"altitude": self.graph.nodes[node]["altitude"] + erosion_produced/(len(self.graph.nodes) - 1) }
+            node: {
+                "altitude": self.graph.nodes[node]["altitude"]
+                + erosion_produced / (self.n_nodes - 1)
+            }
             for node in self.graph.nodes()
         }
-        new_altitudes[self.out_node] = {"altitude": 0}
+        new_altitudes[self.destination] = {"altitude": 0}
 
         nx.set_node_attributes(self.graph, new_altitudes)
 
-    def run(self, seasons: int = 1):
+    def run(self, seasons: int = 1) -> None:
         """
         Run the RFD algorithm for a specified number of seasons.
 
@@ -194,27 +224,27 @@ class RFD:
                 self.erode()
                 self.deposit_sediments()
 
-                if n % 5 == 0:
-                    self.climbing_param += 0.2
+                if n % self.climbing_param_increment_every == 0:
+                    self.climbing_param += self.climbing_param_increment
 
                 n += 1
 
-                if len(set(self.droplets.values())) == 1 or n == self.n_season_stop:
+                if len(set(self.droplets.values())) == 1 or n == self.n_iterations:
                     break
 
         self.find_optimal_altitude_path()
 
-    def find_optimal_altitude_path(self):
+    def find_optimal_altitude_path(self) -> list[tuple[int, int]]:
         """
-        Determine the optimal path from in_node to out_node based on altitude.
+        Determine the optimal path from origin to destination based on altitude.
 
         Returns:
             list: The optimal path as a sequence of nodes.
         """
-        current_node = self.in_node
+        current_node = self.origin
         self.optimal_altitude_path = [current_node]
 
-        while current_node != self.out_node:
+        while current_node != self.destination:
             neighbors = [
                 n
                 for n in self.graph.neighbors(current_node)
@@ -231,7 +261,7 @@ class RFD:
 
         return self.optimal_altitude_path
 
-    def path_cost(self, path: list[Hashable]):
+    def path_cost(self, path: list[Hashable]) -> float:
         """
         Calculate the total cost (sum of distances) of a given path.
 
@@ -244,11 +274,13 @@ class RFD:
         path_edges = list(zip(path[:-1], path[1:]))
         return sum(self.graph.edges[edge]["distance"] for edge in path_edges)
 
-    def plot_graph(self):
+    def plot_graph(self) -> None:
         """
         Plot the graph with nodes colored by altitude and the optimal path highlighted.
         """
-        altitudes = [self.graph.nodes[node].get("altitude") for node in self.graph.nodes()]
+        altitudes = [
+            self.graph.nodes[node].get("altitude") for node in self.graph.nodes()
+        ]
         pos = {node: node for node in self.graph.nodes()}
 
         norm = colors.Normalize(vmin=min(altitudes), vmax=max(altitudes))
@@ -274,7 +306,11 @@ class RFD:
             zip(self.optimal_altitude_path[:-1], self.optimal_altitude_path[1:])
         )
         nx.draw_networkx_edges(
-            self.graph, pos, edgelist=optimal_altitude_path_edges, edge_color="red", width=2
+            self.graph,
+            pos,
+            edgelist=optimal_altitude_path_edges,
+            edge_color="red",
+            width=2,
         )
 
         # Add the weights in the edges
@@ -292,7 +328,7 @@ class RFD:
 
         plt.savefig("graph.png")
 
-    def plot_optimal_path_altitude(self):
+    def plot_optimal_path_altitude(self) -> None:
         """
         Plot the altitude profile along the optimal path.
         """
@@ -310,15 +346,14 @@ class RFD:
         plt.grid(True, linestyle="--", alpha=0.7)
 
         plt.tight_layout()
-        
+
         plt.savefig("path_altitude.png")
 
 
 if __name__ == "__main__":
-    while True:
-        G = nx.grid_2d_graph(10, 10)
-        rfd = RFD(graph=G, in_node=(1,1), out_node=(5,5))
-        rfd.run(seasons=25)
-        rfd.plot_graph()
-        rfd.plot_optimal_path_altitude()
-        print(f"Optimal altitude path: {rfd.optimal_altitude_path}")
+    G = nx.grid_2d_graph(10, 10)
+    rfd = RFD(graph=G, origin=(1, 1), destination=(5, 5))
+    rfd.run(seasons=100)
+    rfd.plot_graph()
+    rfd.plot_optimal_path_altitude()
+    print(f"Optimal altitude path: {rfd.optimal_altitude_path}")
